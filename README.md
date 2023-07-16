@@ -1,5 +1,5 @@
 #  AMB - Arbitrary Message Bridge
-The Arbitrary Message Bridge (AMB) is designed to relay **any data** between two EVM-based chains. The user encodes data in the form of an arbitrary method call, which can also include or exclude parameters. This information, along with the target contract address and foreign chain ID, is passed to the *Sender* contract.  As soon as data are relayed from chain A to chain B by the validators, the user can call the ```executeMessage``` function in the *Receiver* contract on side B to execute the encoded method of the target contract.
+The Arbitrary Message Bridge (AMB) is designed to relay **any data** between two EVM-based chains. The user encodes data in the form of an arbitrary method call, which can also include or exclude parameters. This information, along with the target contract address and foreign chain ID, is passed to the *Sender* contract.  As soon as data are relayed from chain A to chain B by the validators, the user can call the ```executeMessage``` function in the *Receiver* contract on side B to execute the encoded method of the target contract. Oracles can validate messages by listening to *Sender* events or using data stored on-chain in the *Sender* contract.
 
 ## Features
 * ```sendMessage```: The main user function of the *Sender* contract. Allows the user to send an encoded message to the provided chain.
