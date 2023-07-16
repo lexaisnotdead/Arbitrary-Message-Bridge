@@ -278,7 +278,6 @@ describe("Receiver only", function() {
             validator10.address
         ];
 
-        console.log(validators);
         TestERC20 = await ethers.getContractFactory("TestERC20");
         TestERC721 = await ethers.getContractFactory("TestERC721");
 
