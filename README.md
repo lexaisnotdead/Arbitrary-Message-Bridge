@@ -45,10 +45,19 @@ Replace ```localhost``` with the name of the network you want to deploy to (e.g.
 ## Links
 Links to the verified contracts in the Goerli network:
 
-[Sender proxy contract](https://goerli.etherscan.io/address/0x129c74253d415A623Ca5Ea5d867208561F5dcB6e#code)
+[Sender V1 proxy contract](https://goerli.etherscan.io/address/0x129c74253d415A623Ca5Ea5d867208561F5dcB6e#code)
 
-[Sender implementation contract](https://goerli.etherscan.io/address/0x66Dc821D18fb74c9e499e05aaC0Efe98b93af9ed#code)
+[Sender V1 implementation contract](https://goerli.etherscan.io/address/0x66Dc821D18fb74c9e499e05aaC0Efe98b93af9ed#code)
 
-[Receiver proxy contract](https://goerli.etherscan.io/address/0xA26155B8bC43F745bc519A708cbcfBFdfF369124#code)
+[Receiver V1 proxy contract](https://goerli.etherscan.io/address/0xA26155B8bC43F745bc519A708cbcfBFdfF369124#code)
 
-[Receiver implementation contract](https://goerli.etherscan.io/address/0xe55a94A1c0536F02674a4151db7269b459Db7e7c#code)
+[Receiver V1 implementation contract](https://goerli.etherscan.io/address/0xe55a94A1c0536F02674a4151db7269b459Db7e7c#code)
+
+
+[Sender V2 proxy contract](https://goerli.etherscan.io/address/0x9d17c90696183f45632a0623bf5629d7b9b6754a#code)
+
+[Sender V2 implementation contract](https://goerli.etherscan.io/address/0xf2ee55c79e45ae4ed3519865e2ca8ae6b741f34a#code)
+
+[Receiver V2 proxy contract](https://goerli.etherscan.io/address/0x1b24bac2ac9eab89050e4a0fc464ed5b53bea4a8#code)
+
+[Receiver V2 implementation contract](https://goerli.etherscan.io/address/0xbe4552da77ee0cea48b1ab52fbe97ddd65e9bfa2#code)

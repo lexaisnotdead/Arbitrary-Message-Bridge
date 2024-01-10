@@ -4,8 +4,9 @@ pragma solidity ^0.8.18;
 import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "./ISender.sol";
 
-contract Sender is AccessControlUpgradeable, UUPSUpgradeable {
+contract Sender is AccessControlUpgradeable, UUPSUpgradeable, ISender {
     bytes32 public constant FEE_MANAGER_ROLE = keccak256("FEE_MANAGER_ROLE");
     bytes32 public constant UPGRADER_ROLE = keccak256("UPGRADER_ROLE");
 
@@ -13,21 +14,39 @@ contract Sender is AccessControlUpgradeable, UUPSUpgradeable {
     uint256 public fees;
     address public feeReceiver;
     bool public isPaused;
+    uint256 public nextMessageId; // rolling message id
 
     struct Message {
         address sender;
-        address contractAddress;
+        address targetAddress;
         bytes data;
         uint256 value;
-        uint256 chainId;
+        uint256 homeChainId;
+        uint256 foreignChainId;
     }
 
-    mapping(bytes32 => Message) public messages; // nonce -> message
+    mapping(uint256 => Message) public messages; // id -> message
 
-    event NewFees(address indexed feeToken, uint256 indexed fees, address indexed feeManager);
+    event NewFees(
+        address indexed feeToken,
+        uint256 indexed fees,
+        address indexed feeManager
+    );
     event NewPauseStatus(bool isPaused);
-    event NewFeeReceiver(address indexed oldFeeReceiver, address indexed newFeeReceiver);
-    event RequestForSignature(address indexed sender, address indexed contractAddress, bytes data, uint256 value, bytes32 indexed nonce, uint256 chainId);
+    event NewFeeReceiver(
+        address indexed oldFeeReceiver,
+        address indexed newFeeReceiver
+    );
+    event RequestForSignature(
+        address indexed sender,
+        address indexed targetAddress,
+        bytes data,
+        uint256 value,
+        uint256 indexed id,
+        uint256 homeChainId,
+        uint256 foreignChainId,
+        bytes32 hash
+    );
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -39,7 +58,7 @@ contract Sender is AccessControlUpgradeable, UUPSUpgradeable {
         _;
     }
 
-    function _authorizeUpgrade(address newImplementation) internal virtual override {
+    function _authorizeUpgrade(address) internal virtual override {
         require(hasRole(DEFAULT_ADMIN_ROLE, msg.sender), "Caller has no admin role");
     }
 
@@ -53,6 +72,7 @@ contract Sender is AccessControlUpgradeable, UUPSUpgradeable {
 
         isPaused = false;
         fees = 0;
+        nextMessageId = 0;
     }
 
     function setFees(address _feeTokenAddress, uint256 _fees) public {
@@ -87,19 +107,34 @@ contract Sender is AccessControlUpgradeable, UUPSUpgradeable {
         emit NewPauseStatus(_pause);
     }
 
-    function sendMessage(address _contractAddress, bytes calldata _data, uint256 _chainId) public payable whenNotPaused() {
-        require(_contractAddress != address(0), "Invalid foreign contract address");
+    function sendMessage(address _targetAddress, bytes calldata _data, uint256 _value, uint256 _chainId) public whenNotPaused() {
+        require(_targetAddress != address(0), "Invalid foreign contract address");
 
         if (address(feeToken) != address(0)) {
-            require(feeToken.allowance(tx.origin, address(this)) >= fees, "The sender does not have approval to spend the user's tokens");
+            require(feeToken.allowance(msg.sender, address(this)) >= fees, "Sender contract does not have approval to spend the user's tokens");
             
-            feeToken.transferFrom(tx.origin, feeReceiver, fees); // msg.sender can be a smart contract - we need original sender
+            feeToken.transferFrom(msg.sender, feeReceiver, fees);
         }
 
-        bytes32 nonce = keccak256(abi.encodePacked(_contractAddress, _data, _chainId));
-        require(messages[nonce].sender == address(0) || messages[nonce].contractAddress == address(0), "Message already used");
+        uint256 messageId = nextMessageId;
+        ++nextMessageId; // increment nextMessageId for use on the next time
+        require(messages[messageId].sender == address(0) || messages[messageId].targetAddress == address(0), "Message already used");
 
-        messages[nonce] = Message( {sender: tx.origin, contractAddress: _contractAddress, data: _data, value: msg.value, chainId: _chainId} );
-        emit RequestForSignature(tx.origin, _contractAddress, _data, msg.value, nonce, _chainId);
+        uint256 homeChainId;
+        assembly {
+            homeChainId := chainid()
+        }
+
+        bytes32 messageHash = keccak256(abi.encodePacked(msg.sender, _targetAddress, _data, _value, messageId, homeChainId, _chainId));
+        messages[messageId] = Message({
+            sender: msg.sender,
+            targetAddress: _targetAddress,
+            data: _data,
+            value: _value,
+            foreignChainId: _chainId,
+            homeChainId: homeChainId
+        });
+
+        emit RequestForSignature(msg.sender, _targetAddress, _data, _value, messageId, homeChainId, _chainId, messageHash);
     }
 }

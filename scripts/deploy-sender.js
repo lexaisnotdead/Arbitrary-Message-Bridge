@@ -1,17 +1,25 @@
 const { ethers, upgrades } = require("hardhat");
 
 async function main() {
-    const Sender = await ethers.getContractFactory("Sender");
+    const [deployer] = await ethers.getSigners();
+  
+    console.log(
+        "Deploying contracts with the account:",
+        deployer.address
+    );
     
-    const senderProxy = await upgrades.deployProxy(Sender, [], { initializer: 'initialize', kind: 'uups' });
-    await senderProxy.deployed();
-    const senderImplementation = await upgrades.erc1967.getImplementationAddress(senderProxy.address);
+    console.log("Account balance:", (await deployer.getBalance()).toString());
 
-    console.log("Sender contract deployed to:", senderProxy.address);
-    console.log("Sender contract implementation address:", senderImplementation);
+    const Sender = await ethers.getContractFactory("Sender");
+    const sender = await upgrades.deployProxy(Sender, { initializer: 'initialize', kind: 'uups' });
+    await sender.deployed();
+    
+    console.log("Sender contract deployed to:", sender.address);
 }
 
-main().catch((error) => {
+main()
+  .then(() => process.exit(0))
+  .catch((error) => {
     console.error(error);
-    process.exitCode = 1;
-});
+    process.exit(1);
+  });

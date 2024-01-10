@@ -9,44 +9,62 @@ import "@openzeppelin/contracts-upgradeable/security/ReentrancyGuardUpgradeable.
 
 contract Receiver is AccessControlEnumerableUpgradeable, UUPSUpgradeable, EIP712Upgradeable, ReentrancyGuardUpgradeable {
     bytes32 public constant VALIDATOR_ROLE = keccak256("VALIDATOR_ROLE");
-    bytes32 public constant MESSAGE_TYPEHASH = keccak256("ValidateMessage(address sender,address contractAddress,bytes data,uint256 value,uint256 chainId,bytes32 nonce)");
-   
-    uint256 public requiredSignatures;
+    bytes32 public constant MESSAGE_TYPEHASH = keccak256("ValidateMessage(address sender,address targetAddress,bytes data,uint256 value,uint256 id,uint256 homeChainId,uint256 foreignChainId,bytes32 hash)");
     bool public isPaused;
+    uint256 private validatorNumerator;
+    uint256 private validatorDenominator;
 
     struct Message {
         address sender;
-        address contractAddress;
+        address targetAddress;
         bytes data;
         uint256 value;
-        uint256 chainId;
-        bytes32 nonce;
+        uint256 id;
+        uint256 homeChainId;
+        uint256 foreignChainId;
+        bytes32 hash;
     }
 
     struct ValidatedMessage {
         address sender;
-        address contractAddress;
+        address targetAddress;
         bytes data;
         uint256 value;
-        uint256 chainId;
+        uint256 id;
+        uint256 homeChainId;
+        uint256 foreignChainId;
         address[] validators;
     }
 
-    mapping (bytes32 => ValidatedMessage) public messages;
-    mapping(bytes32 => bool) public executedMessages;
+    mapping (address => bool) public validators;
+    mapping (uint256 => ValidatedMessage) public messages;
+    mapping (uint256 => bool) public executedMessages;
 
     event NewPauseStatus(bool isPaused);
-    event ValidatorsRemoved(address[] validators);
-    event MessageExecuted(address[] validators, address indexed sender, address contractAddress, bytes data, uint256 value, uint256 chainId, bytes32 indexed nonce);
-    event MessageFailed(address indexed sender, address contractAddress, bytes data, uint256 value, uint256 chainId, bytes32 indexed nonce);
-    event NewRequiredSignatures(uint256 indexed oldRequiredSignatures, uint256 indexed newRequiredSignatures);
+    event ValidatorAdded(address validator);
+    event ValidatorRemoved(address validator);
+    event MessageExecuted(
+        address[] validators,
+        address indexed sender,
+        address indexed targetAddress,
+        bytes data,
+        uint256 value,
+        uint256 indexed id,
+        uint256 homeChainId,
+        uint256 foreignChainId,
+        bytes32 hash
+    );
+    event NewValidatorThresholdRatio(
+        uint256 indexed newNumerator,
+        uint256 indexed newDenominator
+    );
     
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
         _disableInitializers();
     }
 
-    function initialize(address[] calldata _validators, uint256 _requiredSignatures) public initializer() {
+    function initialize(address[] calldata _validators, uint256 _validatorNumerator, uint256 _validatorDenominator) public initializer() {
         __AccessControl_init();
         __UUPSUpgradeable_init();
         __EIP712_init("Receiver contract", "0.0.1");
@@ -54,12 +72,21 @@ contract Receiver is AccessControlEnumerableUpgradeable, UUPSUpgradeable, EIP712
 
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
 
-        require(_requiredSignatures == ( (_validators.length * 2) / 3 ), "The number of required signatures must be 2/3 of the number of validators");
-        requiredSignatures = _requiredSignatures;
+        require(
+            _validators.length * _validatorNumerator / _validatorDenominator >= 1,
+            "bridge validator consensus threshold must be >= 1"
+        );
+
+        validatorNumerator = _validatorNumerator;
+        validatorDenominator = _validatorDenominator;
 
         for (uint256 i = 0; i < _validators.length; ++i) {
             _grantRole(VALIDATOR_ROLE, _validators[i]);
         }
+    }
+
+    function _authorizeUpgrade(address ) internal virtual override {
+        require(hasRole(DEFAULT_ADMIN_ROLE, msg.sender), "Caller has no admin role");
     }
 
     receive() external payable {}
@@ -69,12 +96,12 @@ contract Receiver is AccessControlEnumerableUpgradeable, UUPSUpgradeable, EIP712
         _;
     }
 
-    function getMessage(bytes32 _nonce) public view returns (ValidatedMessage memory) {
-        return messages[_nonce];
+    function getMessage(uint256 _messageId) public view returns (ValidatedMessage memory) {
+        return messages[_messageId];
     }
 
-    function getExecutedMessage(bytes32 _nonce) public view returns (bool) {
-        return executedMessages[_nonce];
+    function getExecutedMessage(uint256 _messageId) public view returns (bool) {
+        return executedMessages[_messageId];
     }
 
     function setPause(bool _pause) public {
@@ -84,96 +111,129 @@ contract Receiver is AccessControlEnumerableUpgradeable, UUPSUpgradeable, EIP712
         emit NewPauseStatus(_pause);
     }
 
-    function removeValidators(address[] calldata _validators) public {
-        require(hasRole(DEFAULT_ADMIN_ROLE, msg.sender), "Caller has no admin role");
-        require((getRoleMemberCount(VALIDATOR_ROLE) - _validators.length) >= requiredSignatures, "Validators cannot be less than the number of required signatures");
-
-        for (uint256 i = 0; i < _validators.length; ++i) {
-            _revokeRole(VALIDATOR_ROLE, _validators[i]);
+    function grantRole(bytes32 role, address account) public override(AccessControlUpgradeable, IAccessControlUpgradeable) {
+        if (role == VALIDATOR_ROLE) {
+            emit ValidatorAdded(account);
         }
-
-        emit ValidatorsRemoved(_validators);
+        AccessControlUpgradeable.grantRole(role, account);
     }
 
-    function setRequiredSignatures(uint256 _requiredSignatures) public {
+    function revokeRole(bytes32 role, address account) public override(AccessControlUpgradeable, IAccessControlUpgradeable) {
+        if (role == VALIDATOR_ROLE) {
+            require(
+                (getRoleMemberCount(VALIDATOR_ROLE) - 1) * validatorNumerator / validatorDenominator >= 1,
+                "bridge validator consensus drops below 1"
+            );
+            emit ValidatorRemoved(account);
+        }
+        AccessControlUpgradeable.revokeRole(role, account);
+    }
+
+    function setValidatorRatio(uint256 _validatorNumerator, uint256 _validatorDenominator) public {
         require(hasRole(DEFAULT_ADMIN_ROLE, msg.sender), "Caller has no admin role");
-        require(_requiredSignatures > 0, "The number of required signatures must be more than 0");
+        require(
+            getRoleMemberCount(VALIDATOR_ROLE) * _validatorNumerator / _validatorDenominator >= 1,
+            "bridge validator consensus threshold must be >= 1"
+        );
+        
+        validatorNumerator = _validatorNumerator;
+        validatorDenominator = _validatorDenominator;
 
-        uint256 oldRequiredSignatures = requiredSignatures;
-        requiredSignatures = _requiredSignatures;
-
-        emit NewRequiredSignatures(oldRequiredSignatures, requiredSignatures);
+        emit NewValidatorThresholdRatio(validatorNumerator, validatorDenominator);
     }
 
-    function _authorizeUpgrade(address newImplementation) internal virtual override {
-        require(hasRole(DEFAULT_ADMIN_ROLE, msg.sender), "Caller has no admin role");
-    }
+    function executeMessage(bytes[] calldata _validatorsSignatures, Message calldata message) public payable whenNotPaused() nonReentrant() returns (bool) {
+        require(!executedMessages[message.id], "Message already executed");
+        // require(msg.sender == message.sender,?"Only the original sender can execute the message. User addresses in different chains must be the same");
+        require(msg.value == message.value, "Receiver: funds do not satisfy the exact number for executing this message");
+        
+        uint256 chainId;
+        assembly {
+            chainId := chainid()
+        }
+        require(message.foreignChainId == chainId, "Wrong network");
 
-    function executeMessage(bytes[] calldata _validatorsSignatures, Message calldata message) public whenNotPaused() nonReentrant() returns (bool) {
-        require(!executedMessages[message.nonce], "Message already executed");
-        require(msg.sender == message.sender, "Only the original sender can execute the message. User addresses in different chains must be the same");
-
-        uint256 validatorsNumber = 0;
-        address[] memory validatorsArray = new address[](_validatorsSignatures.length);
-
+        uint256 gatheredValidatorsNumber = 0;
+        address[] memory gatheredValidators = new address[](_validatorsSignatures.length);
+        
         for (uint256 i = 0; i < _validatorsSignatures.length; ++i) {
-            address validator = recoverSigner(message.sender, message.contractAddress, message.data, message.value, message.chainId, message.nonce, _validatorsSignatures[i]);
+            address validator = recoverSigner(message, _validatorsSignatures[i]);
 
             if (!hasRole(VALIDATOR_ROLE, validator)) {
                 continue;
             }
 
-            if (arrayContains(validatorsArray, validator)) {
+            if (validators[validator]) {
                 continue;
             }
 
-            validatorsArray[validatorsNumber] = validator;
-            ++validatorsNumber;
+            validators[validator] = true;
+            gatheredValidators[gatheredValidatorsNumber] = validator;
+            ++gatheredValidatorsNumber;
         }
 
-        require(validatorsNumber >= requiredSignatures, "Not enough signatures");
-        address[] memory _validators = new address[](validatorsNumber); // we don't want ['0xf56c...', '0xhb5g...', '0x67tg...', '0x0000...', '0x0000...']
-        for (uint256 i = 0; i < validatorsNumber; ++i) {
-            _validators[i] = validatorsArray[i];
+        require(
+            gatheredValidatorsNumber >= getRoleMemberCount(VALIDATOR_ROLE)*validatorNumerator/validatorDenominator,
+            "Not enough signatures"
+        );
+
+        if (gatheredValidatorsNumber < _validatorsSignatures.length) {
+            assembly {
+                mstore(gatheredValidators, gatheredValidatorsNumber)
+            }
         }
 
-        if (messages[message.nonce].sender == address(0) || // either this mapping is empty, or...
-           (keccak256(abi.encodePacked(messages[message.nonce].validators)) != keccak256(abi.encodePacked(_validators))) ) { // ...the data stored in it is different (the user tries to reexecute the message after a failed attempt, but with different signatures)
-            messages[message.nonce] = ValidatedMessage({
+        if (messages[message.id].sender == address(0) || // either this mapping is empty, or...
+           (keccak256(abi.encodePacked(messages[message.id].validators)) != keccak256(abi.encodePacked(gatheredValidators)))) { // ...the data stored in it is different (the user tries to reexecute the message after a failed attempt, but with different signatures)
+            messages[message.id] = ValidatedMessage({
                 sender:          message.sender,
-                contractAddress: message.contractAddress,
+                targetAddress:   message.targetAddress,
                 data:            message.data,
                 value:           message.value,
-                chainId:         message.chainId,
-                validators:      _validators
+                id:              message.id,
+                homeChainId:     message.homeChainId,
+                foreignChainId:  message.foreignChainId,
+                validators:      gatheredValidators
             });
         }
 
-
-        (bool success, ) = message.contractAddress.call{value: message.value}(message.data); // (target contract): if msg.sender == receiver contract -> tx.origin == original message sender (line #114)
+        (bool success, ) = message.targetAddress.call{value: message.value}(message.data);
         if (!success) {
-            emit MessageFailed(message.sender, message.contractAddress, message.data, message.value, message.chainId, message.nonce);
-            return false;
+            revert("call to target address failed");
         }
 
-        executedMessages[message.nonce] = true;
-        emit MessageExecuted(_validators, message.sender, message.contractAddress, message.data, message.value, message.chainId, message.nonce);
+        executedMessages[message.id] = true;
+        emit MessageExecuted(
+            gatheredValidators,
+            message.sender,
+            message.targetAddress,
+            message.data,
+            message.value,
+            message.id,
+            message.homeChainId,
+            message.foreignChainId,
+            message.hash
+        );
+
+        for (uint256 i = 0; i < gatheredValidatorsNumber; ++i) {
+            delete validators[gatheredValidators[i]];
+        }
 
         return true;
     }
 
-    function arrayContains(address[] memory array, address value) private pure returns (bool) {
-        for (uint256 i = 0; i < array.length; ++i) {
-            if (array[i] == value) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    function recoverSigner(address _sender, address _contractAddress, bytes memory _data, uint256 value, uint256 _chainId, bytes32 _nonce, bytes memory _signature) private view returns(address) {
-        bytes32 messageHash = keccak256(abi.encode(MESSAGE_TYPEHASH, _sender, _contractAddress, keccak256(abi.encodePacked(_data)), value, _chainId, _nonce));
+    function recoverSigner(Message memory _message, bytes memory _signature) private view returns(address) {
+        bytes32 messageHash = keccak256(abi.encode(
+            MESSAGE_TYPEHASH,
+            _message.sender,
+            _message.targetAddress,
+            keccak256(abi.encodePacked(_message.data)),
+            _message.value,
+            _message.id,
+            _message.homeChainId,
+            _message.foreignChainId,
+            _message.hash
+        ));
         bytes32 digest = _hashTypedDataV4(messageHash);
 
         return ECDSAUpgradeable.recover(digest, _signature);
